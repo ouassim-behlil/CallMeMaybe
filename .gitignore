@@ -1,0 +1,11 @@
+/uv.lock
+__pycache__/
+*.py[cod]
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.env
+venv/
+.idea/
