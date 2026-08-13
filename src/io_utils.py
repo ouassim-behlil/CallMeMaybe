@@ -15,7 +15,7 @@ class DataFileError(Exception):
         traceback-only message — always say *which file* and *what* was wrong.
         """
 
-def _read_json(path: Path) -> object:
+def read_json(path: Path) -> object:
     """Read and parser a JSON file and raise a DataFileError if it fails."""
 
     try:
@@ -41,13 +41,13 @@ def _validate(model_cls: Type[T], raw: object, path: Path) -> T:
 def load_function_definitions(path: Path) -> FunctionsDefinitionFile:
     """ Load and validate functions_definition.json """
 
-    raw = _read_json(path)
+    raw = read_json(path)
     return _validate(FunctionsDefinitionFile, raw, path)
 
 def load_prompts(path: Path) -> PromptsFile:
     """ Load and validate prompts.json """
 
-    raw = _read_json(path)
+    raw = read_json(path)
     return _validate(PromptsFile, raw, path)
 
 def save_output(path: Path, items: List[OutputItem]) -> None:

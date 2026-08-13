@@ -18,7 +18,7 @@ from src.io_utils import (
     load_prompts,
     save_output,
     DataFileError,
-    _read_json,
+    read_json,
     _validate,
 )
 
@@ -39,12 +39,12 @@ def write_json(tmp_path: Path, filename: str, data: object) -> Path:
 
 def test_read_json_valid(tmp_path):
     path = write_json(tmp_path, "valid.json", {"a": 1})
-    assert _read_json(path) == {"a": 1}
+    assert read_json(path) == {"a": 1}
 
 
 def test_read_json_file_not_found(tmp_path):
     with pytest.raises(DataFileError):
-        _read_json(tmp_path / "missing.json")
+        read_json(tmp_path / "missing.json")
 
 
 def test_read_json_invalid_json(tmp_path):
@@ -52,7 +52,7 @@ def test_read_json_invalid_json(tmp_path):
     path.write_text("{ invalid json", encoding="utf-8")
 
     with pytest.raises(DataFileError) as exc:
-        _read_json(path)
+        read_json(path)
 
     assert "Invalid JSON" in str(exc.value)
 
