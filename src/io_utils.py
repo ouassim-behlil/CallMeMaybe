@@ -26,7 +26,7 @@ def read_json(path: Path) -> object:
     except PermissionError as exc:
         raise DataFileError(f"Permission denied {path}") from exc
     except json.JSONDecodeError as exc:
-        raise DataFileError(f"Invalid JSON {path}: (line {exc.lineno}, column {exc.colno}): {exc.msg}")
+        raise DataFileError(f"Invalid JSON {path}: (line {exc.lineno}, column {exc.colno}): {exc.msg}") from exc
     except UnicodeDecodeError as exc:
         raise DataFileError(f"File is not valid UTF-8 {path}") from exc
 

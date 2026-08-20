@@ -1,5 +1,5 @@
-import json
 from pathlib import Path
+from typing import cast
 
 from src import read_json, DataFileError
 
@@ -29,6 +29,6 @@ def load_vocab(vocab_path: Path) -> dict[str, int]:
     """ Load the vocabulary from the given path"""
     raw = read_json(vocab_path)
     if not isinstance(raw, dict):
-        raise DataFileError()
-    return raw
+        raise DataFileError("Expected vocab to be a dictionary.")
+    return cast(dict[str, int], raw)
 
