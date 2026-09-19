@@ -1,28 +1,24 @@
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from typing import Optional
 
+
 class GrammarState(ABC):
-     
     @abstractmethod
     def step(self, char: str) -> Optional["GrammarState"]:
-        """ Consume One character. Return the next state or None if invalid. """
-
+        """Consume one character and return the next state."""
 
     @property
     @abstractmethod
     def is_complete(self) -> bool:
-        
-        """Whether stopping generation *right now* would yield valid JSON
-        for this fragment (not necessarily the only valid stopping point —
-        e.g. an integer is complete after each digit, since more digits
-        could still follow)."""
+        """Whether stopping now produces a valid value."""
 
 
 class LiteralState(GrammarState):
-    """Matches one fixed string exactly, e.g. punctuation or a key name."""
+    """Match one fixed string exactly."""
 
     def __init__(self, remaining: str) -> None:
-        self.remaining:str = remaining
+        self.remaining: str = remaining
 
     def step(self, char: str) -> Optional["GrammarState"]:
         if self.remaining and self.remaining[0] == char:
@@ -31,31 +27,34 @@ class LiteralState(GrammarState):
 
     @property
     def is_complete(self) -> bool:
-        return len(self.remaining) == 0
+        return not self.remaining
 
 
 class LiteralChoiceState(GrammarState):
-    """Matches exactly one of several fixed strings — e.g. function names,
-    or JSON's `true`/`false`."""
+    """Match exactly one of several fixed strings."""
 
     def __init__(self, remaining_candidates: frozenset[str]) -> None:
         self._remaining = remaining_candidates
 
-
     @classmethod
     def from_options(cls, options: list[str]) -> "LiteralChoiceState":
-
-        for a in options:
-            for b in options:
-                if a != b and b.startswith(a):
+        normalized = [option for option in options if option is not None]
+        for first in normalized:
+            for second in normalized:
+                if first != second and second.startswith(first):
                     raise ValueError(
-                        f"Ambiguous literal choices: {a!r} is a prefix of {b!r}"
+                        f"Ambiguous literal choices: {first!r} is a prefix "
+                        f"of {second!r}"
                     )
-        return cls(frozenset(options))
+        return cls(frozenset(normalized))
 
-    def step(self, char: str) -> GrammarState | None:
-        nxt = frozenset(c[1:] for c in self._remaining if c and c[0] == char)
-        return LiteralChoiceState(nxt) if nxt else None
+    def step(self, char: str) -> Optional["GrammarState"]:
+        next_candidates = frozenset(
+            candidate[1:]
+            for candidate in self._remaining
+            if candidate and candidate[0] == char
+        )
+        return LiteralChoiceState(next_candidates) if next_candidates else None
 
     @property
     def is_complete(self) -> bool:
@@ -63,25 +62,23 @@ class LiteralChoiceState(GrammarState):
 
 
 class NumberState(GrammarState):
-    """JSON number grammar: -?(0|[1-9][0-9]*)(\\.[0-9]+)?  (no exponents).
-
-    Explicitly forbids leading zeros followed by more digits (`01` is not
-    valid JSON — Python's json.loads rejects it), since the whole point of
-    this engine is guaranteeing output that actually parses.
-    """
+    """Match JSON numbers without exponents."""
 
     _START, _ZERO, _INT, _AFTER_DOT, _FRAC = (
-        "start", "zero", "int", "after_dot", "frac",
+        "start",
+        "zero",
+        "int",
+        "after_dot",
+        "frac",
     )
 
     def __init__(self, phase: str = _START, seen_minus: bool = False) -> None:
         self._phase = phase
         self._seen_minus = seen_minus
 
-
-    def step(self, char: str) -> GrammarState | None:
-        p = self._phase
-        if p == self._START:
+    def step(self, char: str) -> Optional["GrammarState"]:
+        phase = self._phase
+        if phase == self._START:
             if char == "-" and not self._seen_minus:
                 return NumberState(self._START, True)
             if char == "0":
@@ -89,30 +86,112 @@ class NumberState(GrammarState):
             if char.isdigit():
                 return NumberState(self._INT)
             return None
-        if p == self._ZERO:
-            if char == ".":
-                return NumberState(self._AFTER_DOT)
-            return None
-        if p == self._INT:
+        if phase == self._ZERO:
+            return NumberState(self._AFTER_DOT) if char == "." else None
+        if phase == self._INT:
             if char.isdigit():
                 return NumberState(self._INT)
             if char == ".":
                 return NumberState(self._AFTER_DOT)
             return None
-        if p == self._AFTER_DOT:
-            if char.isdigit():
-                return NumberState(self._FRAC)
-            return None
-        if p == self._FRAC:
-            if char.isdigit():
-                return NumberState(self._FRAC)
-            return None
-        
-
+        if phase == self._AFTER_DOT:
+            return NumberState(self._FRAC) if char.isdigit() else None
+        if phase == self._FRAC:
+            return NumberState(self._FRAC) if char.isdigit() else None
+        return None
 
     @property
     def is_complete(self) -> bool:
-        return self._phase in (self._ZERO, self._FRAC, self._INT)
-    
+        return self._phase in (self._ZERO, self._INT, self._FRAC)
 
-        
+
+class StringContentState(GrammarState):
+    """Match the characters between JSON string quotes."""
+
+    def __init__(self, in_escape: bool = False) -> None:
+        self._in_escape = in_escape
+
+    def step(self, char: str) -> Optional["GrammarState"]:
+        if self._in_escape:
+            if char in '\\"/bfnrt':
+                return StringContentState()
+            return None
+        if char == '"':
+            return None
+        if char == "\\":
+            return StringContentState(in_escape=True)
+        if ord(char) < 0x20:
+            return None
+        return StringContentState()
+
+    @property
+    def is_complete(self) -> bool:
+        return not self._in_escape
+
+
+class ConcatState(GrammarState):
+    """Sequence several sub-grammars with epsilon-style hand-off."""
+
+    def __init__(self, parts: list[GrammarState], index: int = 0) -> None:
+        self._parts = parts
+        self._index = index
+
+    def step(self, char: str) -> Optional["ConcatState"]:
+        index = self._index
+        parts = self._parts
+        while index < len(parts):
+            next_state = parts[index].step(char)
+            if next_state is not None:
+                new_parts = list(parts)
+                new_parts[index] = next_state
+                return ConcatState(parts=new_parts, index=index)
+            if parts[index].is_complete and index + 1 < len(parts):
+                index += 1
+                continue
+            return None
+        return None
+
+    @property
+    def is_complete(self) -> bool:
+        index = self._index
+        while index < len(self._parts):
+            if not self._parts[index].is_complete:
+                return False
+            index += 1
+        return True
+
+
+def string_value_grammar() -> ConcatState:
+    """Return a quoted JSON string grammar."""
+    return ConcatState(
+        [LiteralState('"'), StringContentState(), LiteralState('"')]
+    )
+
+
+def value_grammar_for_type(param_type: str) -> GrammarState:
+    """Return the grammar for one parameter value."""
+    if param_type == "number":
+        return NumberState()
+    if param_type == "string":
+        return string_value_grammar()
+    if param_type == "boolean":
+        return LiteralChoiceState.from_options(["true", "false"])
+    raise ValueError(f"Unsupported parameter type: {param_type!r}")
+
+
+def function_name_grammar(names: list[str]) -> LiteralChoiceState:
+    """Return a grammar for one of the known function names."""
+    return LiteralChoiceState.from_options(names)
+
+
+def parameters_object_grammar(param_types: Mapping[str, str]) -> ConcatState:
+    """Return a JSON object grammar for the declared parameter types."""
+    keys = list(param_types.keys())
+    parts: list[GrammarState] = [LiteralState("{")]
+    for index, key in enumerate(keys):
+        parts.append(LiteralState(f'"{key}": '))
+        parts.append(value_grammar_for_type(param_types[key]))
+        if index < len(keys) - 1:
+            parts.append(LiteralState(", "))
+    parts.append(LiteralState("}"))
+    return ConcatState(parts)
